@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>file-connect</title>
+<style>
+:root{--bg:#eef2f6;--card:#fff;--tx:#14202b;--mut:#5d6b78;--ac:#0b6e99;--acx:#fff;--bd:#d3dce5;--ok:#1b7f4b;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1720;--card:#17222d;--tx:#e8eef4;--mut:#93a3b2;--ac:#4cc3f0;--acx:#07222d;--bd:#26343f;--ok:#5fd39a;--bad:#ff8b82}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 "Segoe UI",system-ui,sans-serif;min-height:100vh}
+main{max-width:720px;margin:0 auto;padding:28px 18px 60px}
+h1{font-size:28px;margin:0 0 4px;letter-spacing:-.5px}
+p.sub{margin:0 0 22px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;margin-bottom:16px}
+.row{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+#qr{background:#fff;padding:10px;border-radius:8px;line-height:0;min-width:168px;min-height:168px}
+.url{word-break:break-all;font:14px ui-monospace,Consolas,monospace;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px;margin:8px 0}
+button,label.btn{display:inline-block;background:var(--ac);color:var(--acx);border:0;border-radius:10px;padding:12px 20px;font:600 16px inherit;cursor:pointer}
+button.alt{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+button:focus-visible,label.btn:focus-within,a:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.status{font-weight:600}.status.ok{color:var(--ok)}.status.bad{color:var(--bad)}
+.item{border-top:1px solid var(--bd);padding:12px 0}
+.item:first-child{border-top:0}
+.name{font-weight:600;word-break:break-all}.meta{color:var(--mut);font-size:14px}
+progress{width:100%;height:8px}
+.pv{max-width:100%;max-height:260px;border-radius:8px;margin-top:8px;display:block}
+.hide{display:none}
+.big{width:100%;text-align:center;padding:22px;font-size:18px}
+</style>
+</head>
+<body>
+<main>
+<h1>file-connect</h1>
+<p class="sub" id="sub"></p>
+
+<section id="pc" class="hide">
+  <div class="card">
+    <div class="row">
+      <div id="qr"></div>
+      <div style="flex:1;min-width:220px">
+        <div class="status" id="pcStatus">Getting your link…</div>
+        <div class="url" id="url"></div>
+        <button class="alt" id="copy">Copy link</button>
+        <p class="meta">Open this link on your phone, or scan the QR code with its camera.</p>
+      </div>
+    </div>
+  </div>
+  <div class="card"><div id="files"><span class="meta">Files from your phone will appear here.</span></div></div>
+</section>
+
+<section id="phone" class="hide">
+  <div class="card" id="picker">
+    <label class="btn big">Tap here to send a photo or video
+      <input type="file" id="inp" accept="image/*,video/*" multiple hidden>
+    </label>
+    <p class="status" id="phStatus" style="margin-top:12px">Getting ready…</p>
+    <div id="queue"></div>
+  </div>
+</section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const CH = 256 * 1024;
+const fmt = n => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : n < 1073741824 ? (n/1048576).toFixed(1) + ' MB' : (n/1073741824).toFixed(2) + ' GB';
+const setStatus = (el, text, cls) => { el.textContent = text; el.className = 'status ' + (cls || ''); };
+const target = location.hash.slice(1);
+
+if (typeof Peer === 'undefined') {
+  $('sub').textContent = 'Could not load the connection library. Check your internet and reload.';
+} else if (target) { startPhone(); } else { startPC(); }
+
+/* ---------- Computer: show link, receive files ---------- */
+function startPC() {
+  $('sub').textContent = 'Receive files from your phone, straight into this page.';
+  $('pc').classList.remove('hide');
+  const id = 'fc-' + Math.random().toString(36).slice(2, 8);
+  const peer = new Peer(id);
+  peer.on('open', () => {
+    const link = location.origin + location.pathname + '#' + id;
+    $('url').textContent = link;
+    new QRCode($('qr'), { text: link, width: 148, height: 148 });
+    setStatus($('pcStatus'), 'Waiting for your phone…');
+    $('copy').onclick = () => navigator.clipboard.writeText(link).then(() => { $('copy').textContent = 'Copied'; });
+  });
+  peer.on('error', e => setStatus($('pcStatus'), 'Connection error: ' + e.type, 'bad'));
+  peer.on('connection', conn => {
+    setStatus($('pcStatus'), 'Phone connected', 'ok');
+    conn.on('close', () => setStatus($('pcStatus'), 'Phone disconnected. Reopen the link on your phone to reconnect.', 'bad'));
+    let cur = null;
+    conn.on('data', d => {
+      if (d.t === 'meta') {
+        if ($('files').querySelector('.meta:only-child')) $('files').innerHTML = '';
+        const el = document.createElement('div'); el.className = 'item';
+        const n = document.createElement('div'); n.className = 'name'; n.textContent = d.name;
+        const m = document.createElement('div'); m.className = 'meta'; m.textContent = fmt(d.size) + ' · receiving…';
+        const p = document.createElement('progress'); p.max = d.size || 1; p.value = 0;
+        el.append(n, m, p); $('files').prepend(el);
+        cur = { d, parts: [], got: 0, el, m, p };
+      } else if (d.t === 'chunk' && cur) {
+        cur.parts.push(d.b); cur.got += d.b.byteLength; cur.p.value = cur.got;
+      } else if (d.t === 'end' && cur) {
+        const blob = new Blob(cur.parts, { type: cur.d.type || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        cur.p.remove(); cur.m.textContent = fmt(cur.d.size);
+        const a = document.createElement('a'); a.href = url; a.download = cur.d.name; a.textContent = 'Download'; a.style.cssText = 'color:var(--ac);font-weight:600;margin-left:10px';
+        cur.m.append(a);
+        const t = cur.d.type || '';
+        if (t.startsWith('image/')) { const i = document.createElement('img'); i.src = url; i.className = 'pv'; cur.el.append(i); }
+        else if (t.startsWith('video/')) { const v = document.createElement('video'); v.src = url; v.controls = true; v.className = 'pv'; cur.el.append(v); }
+        else if (t.startsWith('audio/')) { const au = document.createElement('audio'); au.src = url; au.controls = true; au.style.cssText = 'width:100%;margin-top:8px'; cur.el.append(au); }
+        cur = null;
+      }
+    });
+  });
+}
+
+/* ---------- Phone: pick files, send ---------- */
+function startPhone() {
+  $('sub').textContent = 'Send photos and videos from this phone to your computer.';
+  $('phone').classList.remove('hide');
+  const peer = new Peer();
+  let conn = null, ready = false;
+  const waiting = [];
+  setStatus($('phStatus'), 'Getting ready…');
+  peer.on('error', e => setStatus($('phStatus'), e.type === 'peer-unavailable' ? 'Computer not found. Ask them to reload their page for a new code.' : 'Connection error: ' + e.type, 'bad'));
+  peer.on('open', () => {
+    conn = peer.connect(target, { reliable: true });
+    conn.on('open', () => {
+      ready = true;
+      setStatus($('phStatus'), 'Ready — tap the button above', 'ok');
+      flush();
+    });
+    conn.on('close', () => { ready = false; setStatus($('phStatus'), 'Disconnected. Ask them to reload their page.', 'bad'); });
+  });
+  async function flush() {
+    while (ready && waiting.length) await sendFile(conn, waiting.shift());
+  }
+  $('inp').onchange = e => {
+    const files = [...e.target.files]; e.target.value = '';
+    if (!files.length) return;
+    waiting.push(...files);
+    if (!ready) setStatus($('phStatus'), 'Got it — sending as soon as it connects…');
+    flush();
+  };
+}
+
+async function sendFile(conn, f) {
+  const el = document.createElement('div'); el.className = 'item';
+  const n = document.createElement('div'); n.className = 'name'; n.textContent = f.name + ' (' + fmt(f.size) + ')';
+  const p = document.createElement('progress'); p.max = f.size || 1; p.value = 0;
+  el.append(n, p); $('queue').prepend(el);
+  conn.send({ t: 'meta', name: f.name, type: f.type, size: f.size });
+  for (let o = 0; o < f.size; o += CH) {
+    const b = await f.slice(o, o + CH).arrayBuffer();
+    while (conn.dataChannel && conn.dataChannel.bufferedAmount > 4e6) await new Promise(r => setTimeout(r, 40));
+    conn.send({ t: 'chunk', b });
+    p.value = Math.min(o + CH, f.size);
+  }
+  conn.send({ t: 'end' });
+  p.remove(); n.textContent += ' ✓ sent';
+}
+</script>
+</body>
+</html>
